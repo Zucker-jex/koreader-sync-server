@@ -51,20 +51,24 @@ RUN mkdir -p /etc/nginx/ssl
 RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout /etc/nginx/ssl/nginx.key -out /etc/nginx/ssl/nginx.crt -subj "/"
 
-# libssl.* are in /usr/lib/x86_64-linux-gnu on Travis Ubuntu precise
-RUN luarocks install --verbose luasocket \
-    && luarocks install luasec \
-    && luarocks install redis-lua \
-    && luarocks install busted \
-    && rm -rf /tmp/*
-
 # add app source code
 COPY ./ koreader-sync-server
 
 # patch gin for https support
 RUN git clone https://github.com/ostinelli/gin \
-    && cd gin && luarocks make \
-    && rm -rf gin /tmp/*
+    && cd gin \
+    && patch -N -p1 < /app/koreader-sync-server/gin.patch \
+    && luarocks make --tree=/usr/local \
+    && cd .. \
+    && rm -rf gin
+
+# install lua dependencies after gin to avoid gin's pinned old versions overwriting them
+RUN luarocks remove --force luasocket 3.0rc1-2 \
+    && luarocks install luasocket \
+    && luarocks install luasec \
+    && luarocks install redis-lua \
+    && luarocks install busted \
+    && rm -rf /tmp/*
 
 # create daemons
 RUN mkdir /etc/service/redis-server
@@ -76,10 +80,9 @@ ENV ENABLE_USER_REGISTRATION=true
 
 # run gin in production mode
 ENV GIN_ENV production
-# run gin in foreground
-RUN echo "daemon off;" >> koreader-sync-server/config/nginx.conf
+# append 'daemon off;' at runtime so tests can still use the config normally
 RUN mkdir /etc/service/koreader-sync-server
-RUN echo -n "#!/bin/sh\ncd /app/koreader-sync-server\nexec gin start" > \
+RUN echo -n "#!/bin/sh\ngrep -q 'daemon off;' /app/koreader-sync-server/config/nginx.conf || echo 'daemon off;' >> /app/koreader-sync-server/config/nginx.conf\ncd /app/koreader-sync-server\nexec gin start" > \
         /etc/service/koreader-sync-server/run
 RUN chmod +x /etc/service/koreader-sync-server/run
 
